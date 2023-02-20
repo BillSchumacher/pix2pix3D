@@ -202,9 +202,7 @@ class ImageFolderDataset(Dataset):
     def _open_file(self, fname):
         if self._type == 'dir':
             return open(os.path.join(self._path, fname), 'rb')
-        if self._type == 'zip':
-            return self._get_zipfile().open(fname, 'r')
-        return None
+        return self._get_zipfile().open(fname, 'r') if self._type == 'zip' else None
 
     def close(self):
         try:
@@ -300,9 +298,7 @@ class ImageSegFolderDataset(Dataset):
     def _open_file(self, fname):
         if self._type == 'dir':
             return open(os.path.join(self._path, fname), 'rb')
-        if self._type == 'zip':
-            return self._get_zipfile().open(fname, 'r')
-        return None
+        return self._get_zipfile().open(fname, 'r') if self._type == 'zip' else None
 
     def _open_seg_file(self, fname):
         if self._type == 'dir':
@@ -372,8 +368,12 @@ class ImageSegFolderDataset(Dataset):
             assert image.ndim == 3 # CHW
             image = image[:, :, ::-1]
             mask = mask[:, :, ::-1]
-        ret = {'image': image.copy(), 'pose': self.get_label(idx), 'mask': mask.copy(), 'idx': idx}
-        return ret
+        return {
+            'image': image.copy(),
+            'pose': self.get_label(idx),
+            'mask': mask.copy(),
+            'idx': idx,
+        }
 
         # image = self._load_raw_image(self._raw_idx[idx])
         # assert isinstance(image, np.ndarray)
@@ -442,9 +442,7 @@ class ImageEdgeFolderDataset(Dataset):
     def _open_file(self, fname):
         if self._type == 'dir':
             return open(os.path.join(self._path, fname), 'rb')
-        if self._type == 'zip':
-            return self._get_zipfile().open(fname, 'r')
-        return None
+        return self._get_zipfile().open(fname, 'r') if self._type == 'zip' else None
 
     def _open_seg_file(self, fname):
         if self._type == 'dir':
@@ -514,8 +512,12 @@ class ImageEdgeFolderDataset(Dataset):
             assert image.ndim == 3 # CHW
             image = image[:, :, ::-1]
             mask = mask[:, :, ::-1]
-        ret = {'image': image.copy(), 'pose': self.get_label(idx), 'mask': mask.copy(), 'idx': idx}
-        return ret
+        return {
+            'image': image.copy(),
+            'pose': self.get_label(idx),
+            'mask': mask.copy(),
+            'idx': idx,
+        }
 
         # image = self._load_raw_image(self._raw_idx[idx])
         # assert isinstance(image, np.ndarray)

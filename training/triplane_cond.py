@@ -39,20 +39,16 @@ class EqualConv2d(torch.nn.Module):
         self.scale   = 1 / math.sqrt(in_channel * kernel_size ** 2)
         self.stride  = stride
         self.padding = padding
-        if bias:
-            self.bias = torch.nn.Parameter(torch.zeros(out_channel))
-        else:
-            self.bias = None
+        self.bias = torch.nn.Parameter(torch.zeros(out_channel)) if bias else None
 
     def forward(self, input):
-        out = F.conv2d(
+        return F.conv2d(
             input,
             self.weight * self.scale,
             bias=self.bias,
             stride=self.stride,
             padding=self.padding,
         )
-        return out
 
     def __repr__(self):
         return (
@@ -97,8 +93,8 @@ class Encoder(torch.nn.Module):
 
         channel_base = int(channel_base * 32768)
         channels_dict = {res: min(channel_base // res, channel_max) for res in self.block_resolutions + [4]}
-        fp16_resolution = max(2 ** (self.img_resolution_log2 + 1 - num_fp16_res), 8)        
-        common_kwargs = dict(img_channels=self.img_channels, architecture=architecture, conv_clamp=conv_clamp)    
+        fp16_resolution = max(2 ** (self.img_resolution_log2 + 1 - num_fp16_res), 8)
+        common_kwargs = dict(img_channels=self.img_channels, architecture=architecture, conv_clamp=conv_clamp)
         cur_layer_idx = 0
         for res in self.block_resolutions:
             in_channels  = channels_dict[res] if res < img_resolution else 0
@@ -110,18 +106,18 @@ class Encoder(torch.nn.Module):
             setattr(self, f'b{res}', block)
             cur_layer_idx += block.num_layers
 
-        # this is an encoder
-        if self.output_mode in ['W', 'W+', 'None']:
-            self.num_ws    = self.model_kwargs.get('num_ws', 0)
-            self.n_latents = self.num_ws if self.output_mode == 'W+' else (0 if self.output_mode == 'None' else 1) 
-            self.w_dim     = self.model_kwargs.get('w_dim', 512)
-            self.add_dim   = self.model_kwargs.get('add_dim', 0) if not self.predict_camera else 9
-            self.out_dim   = self.w_dim * self.n_latents + self.add_dim
-            assert self.out_dim > 0, 'output dimenstion has to be larger than 0'
-            assert self.block_resolutions[-1] // 2 == 4, "make sure the last resolution is 4x4"
-            self.projector = EqualConv2d(channels_dict[4], self.out_dim, 4, padding=0, bias=False)
-        else:
+        if self.output_mode not in ['W', 'W+', 'None']:
             raise NotImplementedError
+        self.num_ws    = self.model_kwargs.get('num_ws', 0)
+        self.n_latents = self.num_ws if self.output_mode == 'W+' else (0 if self.output_mode == 'None' else 1)
+        self.w_dim     = self.model_kwargs.get('w_dim', 512)
+        self.add_dim = (
+            9 if self.predict_camera else self.model_kwargs.get('add_dim', 0)
+        )
+        self.out_dim   = self.w_dim * self.n_latents + self.add_dim
+        assert self.out_dim > 0, 'output dimenstion has to be larger than 0'
+        assert self.block_resolutions[-1] // 2 == 4, "make sure the last resolution is 4x4"
+        self.projector = EqualConv2d(channels_dict[4], self.out_dim, 4, padding=0, bias=False)
         self.register_buffer("alpha", torch.scalar_tensor(-1))
 
     def set_alpha(self, alpha):
@@ -154,20 +150,16 @@ class Encoder(torch.nn.Module):
         return block_resolutions, alpha, lowres_head
 
     def forward(self, inputs, **block_kwargs):
-        if isinstance(inputs, dict):
-            img = inputs['img']
-        else:
-            img = inputs
-
+        img = inputs['img'] if isinstance(inputs, dict) else inputs
         block_resolutions, alpha, lowres_head = self.get_block_resolutions(img)
         if img.size(-1) > block_resolutions[0]:
             img = downsample(img, block_resolutions[0])
 
         if self.progressive and (self.lowres_head is not None) and (self.alpha > -1) and (self.alpha < 1) and (alpha > 0):
             img0 = downsample(img, img.size(-1) // 2)
-           
+
         x = None if (not self.progressive) or (block_resolutions[0] == self.img_resolution) \
-            else getattr(self, f'b{block_resolutions[0]}').fromrgb(img)
+                else getattr(self, f'b{block_resolutions[0]}').fromrgb(img)
 
         for res in block_resolutions:
             block = getattr(self, f'b{res}')
@@ -177,14 +169,14 @@ class Encoder(torch.nn.Module):
                 if self.progressive:
                     x = x * alpha + block.fromrgb(img0) * (1 - alpha)      # combine from img0           
             x, img = block(x, img, **block_kwargs)
-        
+
         outputs = {}
         if self.output_mode in ['W', 'W+', 'None']:
             out = self.projector(x)[:,:,0,0]
             if self.predict_camera:
                 out, out_cam_9d = out[:, 9:], out[:, :9]
                 outputs['camera'] = camera_9d_to_16d(out_cam_9d)
-            
+
             if self.output_mode == 'W+':
                 out = rearrange(out, 'b (n s) -> b n s', n=self.num_ws, s=self.w_dim)
             elif self.output_mode == 'W':
@@ -617,8 +609,7 @@ class Generator_cond(torch.nn.Module):
 
     def forward(self, z, c, truncation_psi=1, truncation_cutoff=None, update_emas=False, **synthesis_kwargs):
         ws = self.mapping(z, c, truncation_psi=truncation_psi, truncation_cutoff=truncation_cutoff, update_emas=update_emas)
-        img = self.synthesis(ws, update_emas=update_emas, **synthesis_kwargs)
-        return img
+        return self.synthesis(ws, update_emas=update_emas, **synthesis_kwargs)
 
 #----------------------------------------------------------------------------
 
@@ -692,7 +683,17 @@ class TriPlaneGenerator(torch.nn.Module):
 
         # Run superresolution to get final image
         rgb_image = feature_image[:, :3]
-        sr_image = self.superresolution(rgb_image, feature_image, ws, noise_mode=self.rendering_kwargs['superresolution_noise_mode'], **{k:synthesis_kwargs[k] for k in synthesis_kwargs.keys() if k != 'noise_mode'})
+        sr_image = self.superresolution(
+            rgb_image,
+            feature_image,
+            ws,
+            noise_mode=self.rendering_kwargs['superresolution_noise_mode'],
+            **{
+                k: synthesis_kwargs[k]
+                for k in synthesis_kwargs
+                if k != 'noise_mode'
+            }
+        )
 
         return {'image': sr_image, 'image_raw': rgb_image, 'image_depth': depth_image}
     
@@ -755,11 +756,18 @@ class TriPlaneSemanticGenerator(torch.nn.Module):
         self.superresolution_semantic = dnnlib.util.construct_class_by_name(class_name=rendering_kwargs['superresolution_module_semantic'], channels=32, img_resolution=img_resolution, sr_num_fp16_res=sr_num_fp16_res, sr_antialias=rendering_kwargs['sr_antialias'], semantic_channels=semantic_channels, **sr_kwargs)
 
         self.decoder = OSGDecoder(64, {'decoder_lr_mul': rendering_kwargs.get('decoder_lr_mul', 1), 'decoder_output_dim': 32, 'sigmoid': True})
-        self.decoder_semantic = OSGDecoder_semantic(32, {'decoder_lr_mul': rendering_kwargs.get('decoder_lr_mul', 1), 'decoder_output_dim': 32, 'sigmoid': True if semantic_channels == 1 else False})
+        self.decoder_semantic = OSGDecoder_semantic(
+            32,
+            {
+                'decoder_lr_mul': rendering_kwargs.get('decoder_lr_mul', 1),
+                'decoder_output_dim': 32,
+                'sigmoid': semantic_channels == 1,
+            },
+        )
 
         self.neural_rendering_resolution = 64
         self.rendering_kwargs = rendering_kwargs
-    
+
         self._last_planes = None
     
     def mapping(self, z, c, batch, truncation_psi=1, truncation_cutoff=None, update_emas=False):
@@ -812,10 +820,30 @@ class TriPlaneSemanticGenerator(torch.nn.Module):
 
         # Run superresolution to get final image
         rgb_image = rgb_feature_image[:, :3]
-        sr_image = self.superresolution(rgb_image, rgb_feature_image, ws_texture, noise_mode=self.rendering_kwargs['superresolution_noise_mode'], **{k:synthesis_kwargs[k] for k in synthesis_kwargs.keys() if k != 'noise_mode'})
+        sr_image = self.superresolution(
+            rgb_image,
+            rgb_feature_image,
+            ws_texture,
+            noise_mode=self.rendering_kwargs['superresolution_noise_mode'],
+            **{
+                k: synthesis_kwargs[k]
+                for k in synthesis_kwargs
+                if k != 'noise_mode'
+            }
+        )
 
         semantic_image = semantics_feature_image[:, :self.semantic_channels]
-        sr_semantic_image = self.superresolution_semantic(semantic_image, semantics_feature_image, ws_semantic, noise_mode=self.rendering_kwargs['superresolution_noise_mode'], **{k:synthesis_kwargs[k] for k in synthesis_kwargs.keys() if k != 'noise_mode'})
+        sr_semantic_image = self.superresolution_semantic(
+            semantic_image,
+            semantics_feature_image,
+            ws_semantic,
+            noise_mode=self.rendering_kwargs['superresolution_noise_mode'],
+            **{
+                k: synthesis_kwargs[k]
+                for k in synthesis_kwargs
+                if k != 'noise_mode'
+            }
+        )
 
         return {'image': sr_image, 'image_raw': rgb_image, 'image_depth': depth_image, 'semantic': sr_semantic_image, 'semantic_raw': semantic_image}
     
@@ -1004,12 +1032,20 @@ class TriPlaneSemanticEntangleGenerator(torch.nn.Module):
         self.superresolution = dnnlib.util.construct_class_by_name(class_name=rendering_kwargs['superresolution_module'], channels=32, img_resolution=img_resolution, sr_num_fp16_res=sr_num_fp16_res, sr_antialias=rendering_kwargs['sr_antialias'], **sr_kwargs)
         self.superresolution_semantic = dnnlib.util.construct_class_by_name(class_name=rendering_kwargs['superresolution_module_semantic'], channels=32, img_resolution=img_resolution, sr_num_fp16_res=sr_num_fp16_res, sr_antialias=rendering_kwargs['sr_antialias'], semantic_channels=semantic_channels, **sr_kwargs)
 
-        self.decoder = OSGDecoder_semantic_lateSeparate(32, {'decoder_lr_mul': rendering_kwargs.get('decoder_lr_mul', 1), 'decoder_output_dim': 32, 'sigmoid': True if semantic_channels == 1 else False, 'semantic_channels': semantic_channels})
+        self.decoder = OSGDecoder_semantic_lateSeparate(
+            32,
+            {
+                'decoder_lr_mul': rendering_kwargs.get('decoder_lr_mul', 1),
+                'decoder_output_dim': 32,
+                'sigmoid': semantic_channels == 1,
+                'semantic_channels': semantic_channels,
+            },
+        )
         # self.decoder_semantic = OSGDecoder_semantic(32, {'decoder_lr_mul': rendering_kwargs.get('decoder_lr_mul', 1), 'decoder_output_dim': 32, 'sigmoid': True if semantic_channels == 1 else False})
 
         self.neural_rendering_resolution = 64
         self.rendering_kwargs = rendering_kwargs
-    
+
         self._last_planes = None
     
     def mapping(self, z, c, batch, truncation_psi=1, truncation_cutoff=None, update_emas=False):
@@ -1053,10 +1089,30 @@ class TriPlaneSemanticEntangleGenerator(torch.nn.Module):
 
         # Run superresolution to get final image
         rgb_image = rgb_feature_image[:, :3]
-        sr_image = self.superresolution(rgb_image, rgb_feature_image, ws, noise_mode=self.rendering_kwargs['superresolution_noise_mode'], **{k:synthesis_kwargs[k] for k in synthesis_kwargs.keys() if k != 'noise_mode'})
+        sr_image = self.superresolution(
+            rgb_image,
+            rgb_feature_image,
+            ws,
+            noise_mode=self.rendering_kwargs['superresolution_noise_mode'],
+            **{
+                k: synthesis_kwargs[k]
+                for k in synthesis_kwargs
+                if k != 'noise_mode'
+            }
+        )
 
         semantic_image = semantics_feature_image[:, :self.semantic_channels]
-        sr_semantic_image = self.superresolution_semantic(semantic_image, semantics_feature_image, ws, noise_mode=self.rendering_kwargs['superresolution_noise_mode'], **{k:synthesis_kwargs[k] for k in synthesis_kwargs.keys() if k != 'noise_mode'})
+        sr_semantic_image = self.superresolution_semantic(
+            semantic_image,
+            semantics_feature_image,
+            ws,
+            noise_mode=self.rendering_kwargs['superresolution_noise_mode'],
+            **{
+                k: synthesis_kwargs[k]
+                for k in synthesis_kwargs
+                if k != 'noise_mode'
+            }
+        )
 
         return {'image': sr_image, 'image_raw': rgb_image, 'image_depth': depth_image, 'semantic': sr_semantic_image, 'semantic_raw': semantic_image}
     
@@ -1116,12 +1172,20 @@ class TriPlaneSemanticEntangleGenerator_withBG(torch.nn.Module):
         self.superresolution = dnnlib.util.construct_class_by_name(class_name=rendering_kwargs['superresolution_module'], channels=32, img_resolution=img_resolution, sr_num_fp16_res=sr_num_fp16_res, sr_antialias=rendering_kwargs['sr_antialias'], **sr_kwargs)
         self.superresolution_semantic = dnnlib.util.construct_class_by_name(class_name=rendering_kwargs['superresolution_module_semantic'], channels=32, img_resolution=img_resolution, sr_num_fp16_res=sr_num_fp16_res, sr_antialias=rendering_kwargs['sr_antialias'], semantic_channels=semantic_channels, **sr_kwargs)
 
-        self.decoder = OSGDecoder_semantic_lateSeparate(32, {'decoder_lr_mul': rendering_kwargs.get('decoder_lr_mul', 1), 'decoder_output_dim': 32, 'sigmoid': True if semantic_channels == 1 else False, 'semantic_channels': semantic_channels})
+        self.decoder = OSGDecoder_semantic_lateSeparate(
+            32,
+            {
+                'decoder_lr_mul': rendering_kwargs.get('decoder_lr_mul', 1),
+                'decoder_output_dim': 32,
+                'sigmoid': semantic_channels == 1,
+                'semantic_channels': semantic_channels,
+            },
+        )
         # self.decoder_semantic = OSGDecoder_semantic(32, {'decoder_lr_mul': rendering_kwargs.get('decoder_lr_mul', 1), 'decoder_output_dim': 32, 'sigmoid': True if semantic_channels == 1 else False})
 
         self.neural_rendering_resolution = 64
         self.rendering_kwargs = rendering_kwargs
-    
+
         self._last_planes = None
     
     def mapping(self, z, c, batch, truncation_psi=1, truncation_cutoff=None, update_emas=False):
@@ -1174,10 +1238,30 @@ class TriPlaneSemanticEntangleGenerator_withBG(torch.nn.Module):
 
         # Run superresolution to get final image
         rgb_image = rgb_feature_image[:, :3]
-        sr_image = self.superresolution(rgb_image, rgb_feature_image, ws, noise_mode=self.rendering_kwargs['superresolution_noise_mode'], **{k:synthesis_kwargs[k] for k in synthesis_kwargs.keys() if k != 'noise_mode'})
+        sr_image = self.superresolution(
+            rgb_image,
+            rgb_feature_image,
+            ws,
+            noise_mode=self.rendering_kwargs['superresolution_noise_mode'],
+            **{
+                k: synthesis_kwargs[k]
+                for k in synthesis_kwargs
+                if k != 'noise_mode'
+            }
+        )
 
         semantic_image = semantics_feature_image[:, :self.semantic_channels]
-        sr_semantic_image = self.superresolution_semantic(semantic_image, semantics_feature_image, ws, noise_mode=self.rendering_kwargs['superresolution_noise_mode'], **{k:synthesis_kwargs[k] for k in synthesis_kwargs.keys() if k != 'noise_mode'})
+        sr_semantic_image = self.superresolution_semantic(
+            semantic_image,
+            semantics_feature_image,
+            ws,
+            noise_mode=self.rendering_kwargs['superresolution_noise_mode'],
+            **{
+                k: synthesis_kwargs[k]
+                for k in synthesis_kwargs
+                if k != 'noise_mode'
+            }
+        )
 
         return {'image': sr_image, 'image_raw': rgb_image, 'image_depth': depth_image, 'semantic': sr_semantic_image, 'semantic_raw': semantic_image, 'weight': weight_image}
     
