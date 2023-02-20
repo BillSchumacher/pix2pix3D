@@ -62,7 +62,7 @@ def main():
     args = parser.parse_args()
     device = 'cuda'
 
-    if args.cfg == 'seg2cat' or args.cfg == 'seg2face':
+    if args.cfg in ['seg2cat', 'seg2face']:
         neural_rendering_resolution = 128
         data_type = 'seg'
     elif args.cfg == 'edge2car':
@@ -82,7 +82,9 @@ def main():
     # mask_data = Path(args.data_dir) / 'afhqcat_seg_6c.zip'
     data_path = '/data2/datasets/AFHQ_eg3d/afhq_v2_train_cat_512.zip'
     mask_data = '/data2/datasets/AFHQ_eg3d/afhqcat_seg_6c_no_nose.zip'
-    dataset_kwargs, dataset_name = init_conditional_dataset_kwargs(str(data_path), str(mask_data), data_type)
+    dataset_kwargs, dataset_name = init_conditional_dataset_kwargs(
+        data_path, mask_data, data_type
+    )
     dataset = dnnlib.util.construct_class_by_name(**dataset_kwargs)
     batch = dataset[args.input_id]
 
@@ -100,7 +102,7 @@ def main():
         with torch.no_grad():
             ws = G.mapping(z, input_pose, {'mask': input_label, 'pose': input_pose})
             out = G.synthesis(ws, input_pose, noise_mode='const', neural_rendering_resolution=neural_rendering_resolution)
-            
+
         image_color = ((out['image'][0].permute(1, 2, 0).cpu().numpy().clip(-1, 1) + 1) * 127.5).astype(np.uint8)
         image_seg = color_mask(torch.argmax(out['semantic'][0], dim=0).cpu().numpy()).astype(np.uint8)
 

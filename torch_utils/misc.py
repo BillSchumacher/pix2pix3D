@@ -19,7 +19,7 @@ import dnnlib
 # Cached construction of constant tensors. Avoids CPU=>GPU copy when the
 # same constant is used multiple times.
 
-_constant_cache = dict()
+_constant_cache = {}
 
 def constant(value, shape=None, dtype=None, device=None, memory_format=None):
     value = np.asarray(value)
@@ -163,11 +163,7 @@ def copy_params_and_buffers(src_module, dst_module, require_all=False, allow_mis
         if name not in src_tensors and name.replace('_semantic', '') not in src_tensors:
             print(f'Warning: {name} not found in source module')
             continue
-        if name not in src_tensors:
-            # print(f'Warning: {name} not found in source module, using {name.replace("_semantic", "")}')
-            name_src = name.replace('_semantic', '')
-        else:
-            name_src = name
+        name_src = name.replace('_semantic', '') if name not in src_tensors else name
         if src_tensors[name_src].shape != tensor.shape and allow_mismatch:
             print(f'Warning: {name_src} shape mismatch: {src_tensors[name_src].shape} vs {tensor.shape}')
             continue
@@ -194,7 +190,7 @@ def ddp_sync(module, sync):
 def check_ddp_consistency(module, ignore_regex=None):
     assert isinstance(module, torch.nn.Module)
     for name, tensor in named_params_and_buffers(module):
-        fullname = type(module).__name__ + '.' + name
+        fullname = f'{type(module).__name__}.{name}'
         if ignore_regex is not None and re.fullmatch(ignore_regex, fullname):
             continue
         tensor = tensor.detach()
@@ -217,12 +213,14 @@ def print_module_summary(module, inputs, max_nesting=3, skip_redundant=True):
     nesting = [0]
     def pre_hook(_mod, _inputs):
         nesting[0] += 1
+
     def post_hook(mod, _inputs, outputs):
         nesting[0] -= 1
         if nesting[0] <= max_nesting:
             outputs = list(outputs) if isinstance(outputs, (tuple, list)) else [outputs]
             outputs = [t for t in outputs if isinstance(t, torch.Tensor)]
             entries.append(dnnlib.EasyDict(mod=mod, outputs=outputs))
+
     hooks = [mod.register_forward_pre_hook(pre_hook) for mod in module.modules()]
     hooks += [mod.register_forward_hook(post_hook) for mod in module.modules()]
 
@@ -263,7 +261,7 @@ def print_module_summary(module, inputs, max_nesting=3, skip_redundant=True):
             (output_dtypes + ['-'])[0],
         ]]
         for idx in range(1, len(e.outputs)):
-            rows += [[name + f':{idx}', '-', '-', output_shapes[idx], output_dtypes[idx]]]
+            rows += [[f'{name}:{idx}', '-', '-', output_shapes[idx], output_dtypes[idx]]]
         param_total += param_size
         buffer_total += buffer_size
     rows += [['---'] * len(rows[0])]

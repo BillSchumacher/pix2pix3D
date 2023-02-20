@@ -114,7 +114,7 @@ def main():
     with dnnlib.util.open_url(args.network) as f:
         G = legacy.load_network_pkl(f)['G_ema'].eval().to(device)
 
-    if args.cfg == 'seg2cat' or args.cfg == 'seg2face':
+    if args.cfg in ['seg2cat', 'seg2face']:
         neural_rendering_resolution = 128
         data_type = 'seg'
         # Initialize pose sampler.
@@ -159,11 +159,13 @@ def main():
         input_label = torch.tensor(batch['mask']).unsqueeze(0).to(device)
 
     # Generate videos
-    z = torch.from_numpy(np.random.RandomState(int(0)).randn(1, G.z_dim).astype('float32')).to(device)
+    z = torch.from_numpy(
+        np.random.RandomState(0).randn(1, G.z_dim).astype('float32')
+    ).to(device)
 
     with torch.no_grad():
         ws = G.mapping(z, input_pose, {'mask': input_label, 'pose': input_pose})
-    
+
     mesh_trimesh = trimesh.Trimesh(*extract_geometry(G, ws, resolution=512, threshold=50.))
 
     verts_np = np.array(mesh_trimesh.vertices)
@@ -191,7 +193,7 @@ def main():
     mesh_trimesh.visual.vertex_colors = semantic_colors.cpu().numpy().astype(np.uint8)
 
     # Save mesh.
-    mesh_trimesh.export(os.path.join(save_dir, f'semantic_mesh.ply'))
+    mesh_trimesh.export(os.path.join(save_dir, 'semantic_mesh.ply'))
 
     mesh = pyrender.Mesh.from_trimesh(mesh_trimesh)
     r = pyrender.OffscreenRenderer(512, 512)
@@ -220,7 +222,11 @@ def main():
         color, depth = r.render(scene)
         frames_mesh.append(color)
 
-    imageio.mimsave(os.path.join(save_dir, f'rendered_mesh_colored.gif'), frames_mesh, fps=60)
+    imageio.mimsave(
+        os.path.join(save_dir, 'rendered_mesh_colored.gif'),
+        frames_mesh,
+        fps=60,
+    )
     r.delete()
 
 

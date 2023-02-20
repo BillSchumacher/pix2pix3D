@@ -90,8 +90,7 @@ class StyleGAN2Loss(Loss):
             img['image'] = augmented_pair[:, :img['image'].shape[1]]
             img['image_raw'] = torch.nn.functional.interpolate(augmented_pair[:, img['image'].shape[1]:], size=img['image_raw'].shape[2:], mode='bilinear', antialias=True)
 
-        logits = self.D(img, c, update_emas=update_emas)
-        return logits
+        return self.D(img, c, update_emas=update_emas)
 
     def accumulate_gradients(self, phase, real_img, real_c, gen_z, gen_c, gain, cur_nimg):
         assert phase in ['Gmain', 'Greg', 'Gboth', 'Dmain', 'Dreg', 'Dboth']
@@ -261,7 +260,7 @@ class StyleGAN2Loss(Loss):
         # Dr1: Apply R1 regularization.
         if phase in ['Dmain', 'Dreg', 'Dboth']:
             name = 'Dreal' if phase == 'Dmain' else 'Dr1' if phase == 'Dreg' else 'Dreal_Dr1'
-            with torch.autograd.profiler.record_function(name + '_forward'):
+            with torch.autograd.profiler.record_function(f'{name}_forward'):
                 real_img_tmp_image = real_img['image'].detach().requires_grad_(phase in ['Dreg', 'Dboth'])
                 real_img_tmp_image_raw = real_img['image_raw'].detach().requires_grad_(phase in ['Dreg', 'Dboth'])
                 real_img_tmp = {'image': real_img_tmp_image, 'image_raw': real_img_tmp_image_raw}
@@ -292,7 +291,7 @@ class StyleGAN2Loss(Loss):
                     training_stats.report('Loss/r1_penalty', r1_penalty)
                     training_stats.report('Loss/D/reg', loss_Dr1)
 
-            with torch.autograd.profiler.record_function(name + '_backward'):
+            with torch.autograd.profiler.record_function(f'{name}_backward'):
                 (loss_Dreal + loss_Dr1).mean().mul(gain).backward()
 
 #----------------------------------------------------------------------------
@@ -390,8 +389,7 @@ class GauGAN3DLoss(Loss):
             input_img['image'] = augmented_pair[:, :input_img['image'].shape[1]]
             input_img['image_raw'] = torch.nn.functional.interpolate(augmented_pair[:, input_img['image'].shape[1]:], size=input_img['image_raw'].shape[2:], mode='bilinear', antialias=True)
 
-        logits = self.D(input_img, c, update_emas=update_emas)
-        return logits
+        return self.D(input_img, c, update_emas=update_emas)
 
     def run_D_semantic(self, img, c, blur_sigma=0, blur_sigma_raw=0, update_emas=False):
         # mask = batch['mask']
@@ -415,8 +413,7 @@ class GauGAN3DLoss(Loss):
             input_img['image'] = augmented_pair[:, :input_img['image'].shape[1]]
             input_img['image_raw'] = torch.nn.functional.interpolate(augmented_pair[:, input_img['image'].shape[1]:], size=input_img['image_raw'].shape[2:], mode='bilinear', antialias=True)
 
-        logits = self.D_semantic(input_img, c, update_emas=update_emas)
-        return logits
+        return self.D_semantic(input_img, c, update_emas=update_emas)
 
     def accumulate_gradients(self, phase, batch, gen_z, gen_c, gain, cur_nimg, debug=False):
         assert phase in ['Gmain', 'Greg', 'Gboth', 'Dmain', 'Dreg', 'Dboth', 'D_semanticmain', 'D_semanticreg', 'D_semanticboth']

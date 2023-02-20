@@ -86,7 +86,7 @@ def main():
     with dnnlib.util.open_url(args.network) as f:
         G = legacy.load_network_pkl(f)['G_ema'].eval().to(device)
 
-    if args.cfg == 'seg2cat' or args.cfg == 'seg2face':
+    if args.cfg in ['seg2cat', 'seg2face']:
         neural_rendering_resolution = 128
         data_type = 'seg'
         # Initialize pose sampler.
@@ -136,7 +136,7 @@ def main():
 
         with torch.no_grad():
             ws = G.mapping(z, input_pose, {'mask': input_label, 'pose': input_pose})
-        
+
         # Generate the video
         frames, frames_label = render_video(G, ws, intrinsics, num_frames = 120, pitch_range = 0.25, yaw_range = 0.35, neural_rendering_resolution=neural_rendering_resolution, device=device)
 
